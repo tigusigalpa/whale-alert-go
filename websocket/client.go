@@ -42,9 +42,12 @@ type Config struct {
 // Client manages a WebSocket connection to the Whale Alert alerts API.
 // It is safe for concurrent use. Automatic reconnection is opt-in.
 type Client struct {
-	config     Config
-	conn       *websocket.Conn
-	mu         sync.Mutex
+	config Config
+	conn   *websocket.Conn
+	mu     sync.Mutex
+	// writeMu serializes all writes. gorilla/websocket permits one concurrent
+	// reader and one concurrent writer, but does not permit concurrent writers.
+	writeMu    sync.Mutex
 	done       chan struct{}
 	running    bool
 	handler    MessageHandler
@@ -116,14 +119,20 @@ func (c *Client) pingLoop(conn *websocket.Conn, done chan struct{}) {
 		case <-done:
 			return
 		case <-ticker.C:
+			// Serialize the connection check and write with Close and send. This
+			// prevents a ping from racing a close frame or application message.
+			c.writeMu.Lock()
 			c.mu.Lock()
 			active := c.conn == conn
 			c.mu.Unlock()
 			if !active {
+				c.writeMu.Unlock()
 				return
 			}
 			conn.SetWriteDeadline(time.Now().Add(defaultWriteTimeout))
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			err := conn.WriteMessage(websocket.PingMessage, nil)
+			c.writeMu.Unlock()
+			if err != nil {
 				c.fireError(fmt.Errorf("whalealert: ping: %w", err))
 				return
 			}
@@ -299,17 +308,19 @@ func (c *Client) backoff(attempt int) time.Duration {
 
 // send marshals and sends a JSON message over the WebSocket.
 func (c *Client) send(ctx context.Context, v interface{}) error {
-	c.mu.Lock()
-	conn := c.conn
-	c.mu.Unlock()
-
-	if conn == nil {
-		return ErrNotConnected
-	}
-
 	data, err := json.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("whalealert: marshal: %w", err)
+	}
+
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return ErrNotConnected
 	}
 
 	conn.SetWriteDeadline(time.Now().Add(defaultWriteTimeout))
@@ -343,22 +354,25 @@ func (c *Client) fireError(err error) {
 // Close gracefully shuts down the WebSocket connection.
 func (c *Client) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if !c.running {
+		c.mu.Unlock()
 		return nil
 	}
 
 	c.running = false
 	close(c.done)
+	conn := c.conn
+	c.conn = nil
+	c.mu.Unlock()
 
-	if c.conn != nil {
-		err := c.conn.WriteMessage(
+	if conn != nil {
+		c.writeMu.Lock()
+		err := conn.WriteMessage(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 		)
-		closeErr := c.conn.Close()
-		c.conn = nil
+		closeErr := conn.Close()
+		c.writeMu.Unlock()
 		if err != nil {
 			return err
 		}
