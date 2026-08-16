@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -519,5 +520,64 @@ func TestClient_ConnectTwice(t *testing.T) {
 	err := c.Connect(context.Background())
 	if err == nil {
 		t.Fatal("expected error for double connect")
+	}
+}
+
+func TestClient_ReconnectsAfterConnectionCloses(t *testing.T) {
+	secondConnection := make(chan struct{}, 1)
+	var connections int
+	var connectionsMu sync.Mutex
+
+	srv := startWSTestServer(t, func(conn *websocket.Conn) {
+		connectionsMu.Lock()
+		connections++
+		connectionNumber := connections
+		connectionsMu.Unlock()
+
+		if connectionNumber == 1 {
+			_ = conn.Close()
+			return
+		}
+
+		secondConnection <- struct{}{}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+	defer srv.Close()
+
+	c := NewClient(Config{
+		URL: wsURL(srv),
+		Reconnect: ReconnectConfig{
+			MaxAttempts:  1,
+			InitialDelay: time.Millisecond,
+			MaxDelay:     time.Millisecond,
+		},
+	})
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect error: %v", err)
+	}
+
+	listenErr := make(chan error, 1)
+	go func() { listenErr <- c.Listen(context.Background()) }()
+
+	select {
+	case <-secondConnection:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for reconnection")
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close error: %v", err)
+	}
+	select {
+	case err := <-listenErr:
+		if err != nil {
+			t.Errorf("Listen error after Close = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for Listen to return")
 	}
 }

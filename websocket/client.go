@@ -77,6 +77,10 @@ func NewClient(cfg Config) *Client {
 
 // Connect establishes the WebSocket connection.
 func (c *Client) Connect(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -182,6 +186,10 @@ func (c *Client) OnError(handler ErrorHandler) {
 // or the context is cancelled. If reconnection is enabled, it will
 // attempt to reconnect and resubscribe with the same subscription ID.
 func (c *Client) Listen(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	for {
 		if err := c.readLoop(ctx); err != nil {
 			if ctx.Err() != nil {
@@ -207,6 +215,7 @@ func (c *Client) Listen(ctx context.Context) error {
 func (c *Client) readLoop(ctx context.Context) error {
 	c.mu.Lock()
 	conn := c.conn
+	done := c.done
 	c.mu.Unlock()
 
 	if conn == nil {
@@ -215,7 +224,7 @@ func (c *Client) readLoop(ctx context.Context) error {
 
 	for {
 		select {
-		case <-c.done:
+		case <-done:
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -225,14 +234,16 @@ func (c *Client) readLoop(ctx context.Context) error {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
 			select {
-			case <-c.done:
+			case <-done:
 				// Close() was called; treat as a clean shutdown.
 				return nil
 			default:
 			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				c.disconnect(conn, done)
 				return ErrConnectionClosed
 			}
+			c.disconnect(conn, done)
 			return fmt.Errorf("whalealert: read: %w", err)
 		}
 
@@ -247,6 +258,24 @@ func (c *Client) readLoop(ctx context.Context) error {
 
 		c.fireMessage(msg)
 	}
+}
+
+// disconnect marks conn as inactive and stops its ping loop. It only changes
+// state when conn is still the client's current connection.
+func (c *Client) disconnect(conn *websocket.Conn, done chan struct{}) {
+	c.mu.Lock()
+	if c.conn != conn || c.done != done {
+		c.mu.Unlock()
+		return
+	}
+	c.running = false
+	c.conn = nil
+	close(done)
+	c.mu.Unlock()
+
+	c.writeMu.Lock()
+	_ = conn.Close()
+	c.writeMu.Unlock()
 }
 
 // shouldReconnect returns true if automatic reconnection is enabled
@@ -294,6 +323,10 @@ func (c *Client) reconnect(ctx context.Context) error {
 			return fmt.Errorf("whalealert: resubscribe socials: %w", err)
 		}
 	}
+
+	c.mu.Lock()
+	c.reconnectAttempts = 0
+	c.mu.Unlock()
 
 	return nil
 }

@@ -3,6 +3,7 @@ package whalealert
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 )
@@ -71,7 +72,7 @@ func (it *TransactionIterator) Next() (*Transaction, error) {
 
 	if it.exhausted || it.nextURL == "" {
 		it.exhausted = true
-		return nil, fmt.Errorf("whalealert: no more transactions")
+		return nil, io.EOF
 	}
 
 	nextPage, err := it.client.Transactions.ListTransactionsNext(it.ctx, it.nextURL)
@@ -85,7 +86,7 @@ func (it *TransactionIterator) Next() (*Transaction, error) {
 
 	if len(it.page.Transactions) == 0 {
 		it.exhausted = true
-		return nil, fmt.Errorf("whalealert: no more transactions")
+		return nil, io.EOF
 	}
 
 	tx := &it.page.Transactions[it.index]

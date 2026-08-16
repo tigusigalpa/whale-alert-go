@@ -2,6 +2,8 @@ package whalealert
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -85,8 +87,8 @@ func TestTransactionIterator_SinglePage(t *testing.T) {
 	}
 
 	_, err = iter.Next()
-	if err == nil {
-		t.Fatal("expected error when exhausted")
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF", err)
 	}
 }
 
@@ -135,8 +137,8 @@ func TestTransactionIterator_MultiplePages(t *testing.T) {
 	}
 
 	_, err = iter.Next()
-	if err == nil {
-		t.Fatal("expected error when exhausted")
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF", err)
 	}
 }
 
