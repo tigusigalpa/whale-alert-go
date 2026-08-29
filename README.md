@@ -4,6 +4,9 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/tigusigalpa/whale-alert-go.svg)](https://pkg.go.dev/github.com/tigusigalpa/whale-alert-go)
 [![CI](https://github.com/tigusigalpa/whale-alert-go/actions/workflows/ci.yml/badge.svg)](https://github.com/tigusigalpa/whale-alert-go/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/tigusigalpa/whale-alert-go/actions/workflows/codeql.yml/badge.svg)](https://github.com/tigusigalpa/whale-alert-go/actions/workflows/codeql.yml)
+[![Codecov](https://codecov.io/gh/tigusigalpa/whale-alert-go/graph/badge.svg)](https://codecov.io/gh/tigusigalpa/whale-alert-go)
+[![Go Report Card](https://goreportcard.com/badge/github.com/tigusigalpa/whale-alert-go)](https://goreportcard.com/report/github.com/tigusigalpa/whale-alert-go)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 An unofficial Go client library for the [Whale Alert Enterprise API](https://developer.whale-alert.io/api-account/documentation).
@@ -194,7 +197,6 @@ The retry policy is designed to be safe and predictable:
 - Retries happen on HTTP 429 (rate limited) and 5xx server errors.
 - The 429 response can include a `Retry-After` header. When present, the client waits at least that long before the next attempt.
 - Backoff is exponential: `initialDelay * 2^attempt`, capped at `maxDelay`.
-- A small amount of jitter is added to avoid thundering-herd behavior.
 - Context cancellation is respected during the backoff sleep, so a cancelled request stops immediately.
 
 ## Error Handling
@@ -272,7 +274,7 @@ if page.Next != "" {
 }
 ```
 
-The same helpers exist for address transactions: `NewAddressTransactionIterator`, `GetAddressTransactionsNext`.
+Address transaction pagination is available through `GetAddressTransactionsNext`.
 
 ## Financial Precision
 
@@ -319,6 +321,7 @@ The project includes unit tests for the REST client, WebSocket client, paginatio
 
 ```bash
 go test ./...
+go test -race ./...
 ```
 
 You can also run the standard Go quality checks:

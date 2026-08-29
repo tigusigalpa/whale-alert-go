@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestGetSupportedBlockchains_Success(t *testing.T) {
@@ -66,6 +69,39 @@ func TestGetSupportedBlockchains_ServerError(t *testing.T) {
 	_, err := c.Status.GetSupportedBlockchains(context.Background())
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestGetSupportedBlockchains_RetriesAndCallsHook(t *testing.T) {
+	var attempts int32
+	var hookCalls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`[{"name":"bitcoin","symbols":["BTC"]}]`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv,
+		WithRetry(1, time.Millisecond, time.Millisecond),
+		WithRequestHook(func(context.Context, string, string, io.Reader) {
+			atomic.AddInt32(&hookCalls, 1)
+		}),
+	)
+	chains, err := c.Status.GetSupportedBlockchains(context.Background())
+	if err != nil {
+		t.Fatalf("GetSupportedBlockchains error: %v", err)
+	}
+	if len(chains) != 1 || chains[0].Name != "bitcoin" {
+		t.Fatalf("chains = %#v, want bitcoin", chains)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 2 {
+		t.Errorf("attempts = %d, want 2", got)
+	}
+	if got := atomic.LoadInt32(&hookCalls); got != 2 {
+		t.Errorf("hook calls = %d, want 2", got)
 	}
 }
 

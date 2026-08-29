@@ -74,7 +74,9 @@ func WithBaseURL(u string) ClientOption {
 // WithHTTPClient replaces the default HTTP client.
 func WithHTTPClient(hc *http.Client) ClientOption {
 	return func(c *Client) {
-		c.httpClient = hc
+		if hc != nil {
+			c.httpClient = hc
+		}
 	}
 }
 
@@ -118,83 +120,35 @@ func WithRequestHook(hook RequestHook) ClientOption {
 
 // doRequest performs an HTTP request with retry handling and response decoding.
 func (c *Client) doRequest(ctx context.Context, method, path string, params url.Values, out interface{}) error {
-	if ctx == nil {
-		ctx = context.Background()
+	reqURL := c.buildURL(path, params)
+	return c.doRequestURL(ctx, method, reqURL, out)
+}
+
+// doRequestURL performs an HTTP request to an already constructed URL with
+// retry handling and response decoding.
+func (c *Client) doRequestURL(ctx context.Context, method, reqURL string, out interface{}) error {
+	respBody, err := c.doRequestURLRaw(ctx, method, reqURL)
+	if err != nil {
+		return err
 	}
-
-	baseCtx := ctx
-	if _, ok := ctx.Deadline(); !ok && c.httpClient.Timeout > 0 {
-		var cancel context.CancelFunc
-		baseCtx, cancel = context.WithTimeout(ctx, c.httpClient.Timeout)
-		defer cancel()
+	if out == nil {
+		return nil
 	}
-
-	for attempt := 0; attempt <= c.retry.MaxAttempts; attempt++ {
-		reqURL := c.buildURL(path, params)
-
-		req, err := http.NewRequestWithContext(baseCtx, method, reqURL, nil)
-		if err != nil {
-			return fmt.Errorf("whalealert: create request: %w", err)
-		}
-		req.Header.Set("Accept", "application/json")
-		req.Header.Set("User-Agent", c.userAgent)
-
-		for _, hook := range c.hooks {
-			hook(baseCtx, method, redactURL(reqURL), nil)
-		}
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			if baseCtx.Err() != nil {
-				return baseCtx.Err()
-			}
-			if attempt < c.retry.MaxAttempts && isRetryable(method) {
-				if waitErr := c.sleep(baseCtx, c.backoff(attempt)); waitErr != nil {
-					return waitErr
-				}
-				continue
-			}
-			return fmt.Errorf("whalealert: request failed: %w", err)
-		}
-
-		respBody, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if readErr != nil {
-			return fmt.Errorf("whalealert: read response: %w", readErr)
-		}
-
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			if out == nil {
-				return nil
-			}
-			if err := decodeJSON(respBody, out); err != nil {
-				return fmt.Errorf("whalealert: decode response: %w", err)
-			}
-			return nil
-		}
-
-		apiErr := newAPIError(resp.StatusCode, respBody, resp.Header)
-
-		if isRetryable(method) && shouldRetryStatus(resp.StatusCode) && attempt < c.retry.MaxAttempts {
-			wait := c.backoff(attempt)
-			if d, ok := parseRetryAfterHeader(resp.Header); ok && d > 0 {
-				wait = d
-			}
-			if sleepErr := c.sleep(baseCtx, wait); sleepErr != nil {
-				return sleepErr
-			}
-			continue
-		}
-
-		return apiErr
+	if err := decodeJSON(respBody, out); err != nil {
+		return fmt.Errorf("whalealert: decode response: %w", err)
 	}
-
-	return fmt.Errorf("whalealert: request exceeded maximum retry attempts")
+	return nil
 }
 
 // doRequestRaw performs an HTTP request and returns the raw response body
 // without decoding. Used for endpoints that may return non-JSON formats.
 func (c *Client) doRequestRaw(ctx context.Context, method, path string, params url.Values) ([]byte, error) {
+	return c.doRequestURLRaw(ctx, method, c.buildURL(path, params))
+}
+
+// doRequestURLRaw performs an HTTP request to an already constructed URL and
+// returns the raw response body without decoding.
+func (c *Client) doRequestURLRaw(ctx context.Context, method, reqURL string) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -207,8 +161,6 @@ func (c *Client) doRequestRaw(ctx context.Context, method, path string, params u
 	}
 
 	for attempt := 0; attempt <= c.retry.MaxAttempts; attempt++ {
-		reqURL := c.buildURL(path, params)
-
 		req, err := http.NewRequestWithContext(baseCtx, method, reqURL, nil)
 		if err != nil {
 			return nil, fmt.Errorf("whalealert: create request: %w", err)
@@ -268,9 +220,11 @@ func (c *Client) doRequestRaw(ctx context.Context, method, path string, params u
 // the api_key parameter is appended.
 func (c *Client) buildURL(path string, params url.Values) string {
 	u := c.baseURL + path
-	if params == nil {
-		params = url.Values{}
+	clonedParams := make(url.Values, len(params))
+	for key, values := range params {
+		clonedParams[key] = append([]string(nil), values...)
 	}
+	params = clonedParams
 	if c.apiKey != "" {
 		params.Set("api_key", c.apiKey)
 	}

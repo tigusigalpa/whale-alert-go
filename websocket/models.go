@@ -4,12 +4,18 @@ package websocket
 type EventType string
 
 const (
-	EventTypeSubscribedAlerts  EventType = "subscribed_alerts"
+	// EventTypeSubscribedAlerts identifies a successful alert subscription.
+	EventTypeSubscribedAlerts EventType = "subscribed_alerts"
+	// EventTypeSubscribedSocials identifies a successful social subscription.
 	EventTypeSubscribedSocials EventType = "subscribed_socials"
-	EventTypeAlert             EventType = "alert"
-	EventTypeSocial            EventType = "social"
-	EventTypeError             EventType = "error"
-	EventTypeUnknown           EventType = "unknown"
+	// EventTypeAlert identifies a transaction alert event.
+	EventTypeAlert EventType = "alert"
+	// EventTypeSocial identifies a social media alert event.
+	EventTypeSocial EventType = "social"
+	// EventTypeError identifies an error event from the provider.
+	EventTypeError EventType = "error"
+	// EventTypeUnknown identifies an unrecognized event.
+	EventTypeUnknown EventType = "unknown"
 )
 
 // AlertAmount represents a single currency amount within an alert.

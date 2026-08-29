@@ -23,6 +23,7 @@ func (e *WSError) Error() string {
 	return fmt.Sprintf("whalealert: websocket error: %s", e.Message)
 }
 
+// Is reports whether the WebSocket error represents a subscription failure.
 func (e *WSError) Is(target error) bool {
 	return target == ErrSubscriptionFailed
 }

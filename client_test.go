@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -60,6 +61,13 @@ func TestWithTimeout(t *testing.T) {
 	c := NewClient("k", WithTimeout(5*time.Second))
 	if c.httpClient.Timeout != 5*time.Second {
 		t.Errorf("timeout = %v, want 5s", c.httpClient.Timeout)
+	}
+}
+
+func TestWithHTTPClient_NilPreservesDefaultClient(t *testing.T) {
+	c := NewClient("k", WithHTTPClient(nil))
+	if c.httpClient == nil {
+		t.Fatal("httpClient should retain the default client")
 	}
 }
 
@@ -349,6 +357,15 @@ func TestBuildURL_WithAPIKey(t *testing.T) {
 	u := c.buildURL("/status", nil)
 	if !strings.Contains(u, "api_key=my-secret-key") {
 		t.Errorf("URL should contain api_key, got: %s", u)
+	}
+}
+
+func TestBuildURL_DoesNotMutateParams(t *testing.T) {
+	c := NewClient("my-secret-key")
+	params := url.Values{"limit": {"10"}}
+	_ = c.buildURL("/status", params)
+	if params.Has("api_key") {
+		t.Fatal("buildURL should not mutate the caller's query parameters")
 	}
 }
 

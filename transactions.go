@@ -106,22 +106,8 @@ func (s *TransactionsService) ListTransactionsNext(ctx context.Context, nextURL 
 		return nil, err
 	}
 
-	req, err := newGetRequest(ctx, s.client, safeURL)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := s.client.httpClient.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("whalealert: request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	result, err := decodeResponse[TransactionPage](resp)
-	if err != nil {
+	var result TransactionPage
+	if err := s.client.doRequestURL(ctx, "GET", safeURL, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil

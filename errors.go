@@ -40,6 +40,7 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("whalealert API error %d", e.StatusCode)
 }
 
+// Is reports whether the API error corresponds to a sentinel API error.
 func (e *APIError) Is(target error) bool {
 	switch target {
 	case ErrUnauthorized:
@@ -60,6 +61,7 @@ func (e *APIError) Is(target error) bool {
 	return false
 }
 
+// As assigns this API error to a compatible target.
 func (e *APIError) As(target interface{}) bool {
 	switch t := target.(type) {
 	case *APIError:

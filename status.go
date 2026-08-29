@@ -18,21 +18,11 @@ type StatusService struct {
 // https://developer.whale-alert.io/api-account/documentation#v2-blockchains
 func (s *StatusService) GetSupportedBlockchains(ctx context.Context) ([]Blockchain, error) {
 	reqURL := s.client.buildURLNoAuth("/status", nil)
-	req, err := newGetRequest(ctx, s.client, reqURL)
-	if err != nil {
+	var result []Blockchain
+	if err := s.client.doRequestURL(ctx, "GET", reqURL, &result); err != nil {
 		return nil, err
 	}
-
-	resp, err := s.client.httpClient.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("whalealert: request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	return decodeResponse[[]Blockchain](resp)
+	return result, nil
 }
 
 // GetBlockchainStatus returns the availability window for a specific blockchain.
