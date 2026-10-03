@@ -581,3 +581,50 @@ func TestClient_ReconnectsAfterConnectionCloses(t *testing.T) {
 		t.Fatal("timeout waiting for Listen to return")
 	}
 }
+
+func TestClient_CloseStopsPendingReconnect(t *testing.T) {
+	disconnected := make(chan struct{}, 1)
+	srv := startWSTestServer(t, func(conn *websocket.Conn) {
+		_ = conn.Close()
+	})
+	defer srv.Close()
+
+	c := NewClient(Config{
+		URL: wsURL(srv),
+		Reconnect: ReconnectConfig{
+			MaxAttempts:  1,
+			InitialDelay: time.Second,
+			MaxDelay:     time.Second,
+		},
+	})
+	c.OnError(func(error) {
+		select {
+		case disconnected <- struct{}{}:
+		default:
+		}
+	})
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect error: %v", err)
+	}
+
+	listenErr := make(chan error, 1)
+	go func() { listenErr <- c.Listen(context.Background()) }()
+
+	select {
+	case <-disconnected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for disconnect")
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close error: %v", err)
+	}
+	select {
+	case err := <-listenErr:
+		if err != nil {
+			t.Errorf("Listen error after Close = %v, want nil", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("timeout waiting for Listen to stop pending reconnect")
+	}
+}

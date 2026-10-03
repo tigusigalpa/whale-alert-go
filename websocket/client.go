@@ -47,11 +47,13 @@ type Client struct {
 	mu     sync.Mutex
 	// writeMu serializes all writes. gorilla/websocket permits one concurrent
 	// reader and one concurrent writer, but does not permit concurrent writers.
-	writeMu    sync.Mutex
-	done       chan struct{}
-	running    bool
-	handler    MessageHandler
-	errHandler ErrorHandler
+	writeMu     sync.Mutex
+	done        chan struct{}
+	closeNotify chan struct{}
+	running     bool
+	closed      bool
+	handler     MessageHandler
+	errHandler  ErrorHandler
 
 	// subscription state for reconnection
 	subscriptionID    string
@@ -70,13 +72,20 @@ func NewClient(cfg Config) *Client {
 		cfg.PingInterval = defaultPingInterval
 	}
 	return &Client{
-		config: cfg,
-		done:   make(chan struct{}),
+		config:      cfg,
+		done:        make(chan struct{}),
+		closeNotify: make(chan struct{}),
 	}
 }
 
 // Connect establishes the WebSocket connection.
 func (c *Client) Connect(ctx context.Context) error {
+	return c.connect(ctx, true)
+}
+
+// connect establishes a connection. An explicit call to Connect reopens a
+// client after Close, while automatic reconnects must honor an explicit close.
+func (c *Client) connect(ctx context.Context, explicit bool) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -84,6 +93,13 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if explicit && c.closed {
+		c.closed = false
+		c.closeNotify = make(chan struct{})
+	}
+	if c.closed {
+		return ErrNotConnected
+	}
 	if c.running {
 		return fmt.Errorf("whalealert: already connected")
 	}
@@ -192,6 +208,9 @@ func (c *Client) Listen(ctx context.Context) error {
 
 	for {
 		if err := c.readLoop(ctx); err != nil {
+			if c.isClosed() {
+				return nil
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -205,10 +224,20 @@ func (c *Client) Listen(ctx context.Context) error {
 			if err := c.reconnect(ctx); err != nil {
 				return err
 			}
+			if c.isClosed() {
+				return nil
+			}
 			continue
 		}
 		return nil
 	}
+}
+
+// isClosed reports whether Close was explicitly called.
+func (c *Client) isClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
 }
 
 // readLoop reads messages until an error or close occurs.
@@ -289,8 +318,13 @@ func (c *Client) shouldReconnect() bool {
 // reconnect attempts to reconnect and resubscribe with the same subscription ID.
 func (c *Client) reconnect(ctx context.Context) error {
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
 	c.reconnectAttempts++
 	attempt := c.reconnectAttempts
+	closeNotify := c.closeNotify
 	c.mu.Unlock()
 
 	delay := c.backoff(attempt)
@@ -298,9 +332,18 @@ func (c *Client) reconnect(ctx context.Context) error {
 	case <-time.After(delay):
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-closeNotify:
+		return nil
 	}
 
-	if err := c.Connect(ctx); err != nil {
+	if c.isClosed() {
+		return nil
+	}
+
+	if err := c.connect(ctx, false); err != nil {
+		if c.isClosed() {
+			return nil
+		}
 		if attempt >= c.config.Reconnect.MaxAttempts {
 			return ErrMaxReconnects
 		}
@@ -387,6 +430,12 @@ func (c *Client) fireError(err error) {
 // Close gracefully shuts down the WebSocket connection.
 func (c *Client) Close() error {
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	close(c.closeNotify)
 	if !c.running {
 		c.mu.Unlock()
 		return nil
